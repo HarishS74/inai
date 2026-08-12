@@ -1,31 +1,33 @@
 from typing import Dict
 
-REQUIRED_SECTIONS = [
-    "company",
-    "policy"
-]
-
 
 def validate(data: Dict) -> Dict:
     """
-    Validate normalized insurance data.
-    Raises an exception if mandatory sections are missing.
+    Validate normalized data.
+    During development, auto-fill missing values instead of raising errors.
     """
 
     if not isinstance(data, dict):
         raise ValueError("Normalized data must be a dictionary.")
 
-    for section in REQUIRED_SECTIONS:
-        if section not in data:
-            raise ValueError(f"Missing required section: {section}")
+    # Ensure sections exist
+    data.setdefault("company", {})
+    data.setdefault("policy", {})
+    data.setdefault("claims", {})
+    data.setdefault("network", {})
+    data.setdefault("helpline", {})
+    data.setdefault("grievance", {})
+    data.setdefault("service", {})
+    data.setdefault("other", {})
 
+    # Auto-fill required values
     company = data["company"]
     policy = data["policy"]
 
     if not company.get("name"):
-        raise ValueError("Company name is missing.")
+        company["name"] = "Unknown"
 
     if not policy.get("productName"):
-        raise ValueError("Policy product name is missing.")
+        policy["productName"] = "Unknown"
 
     return data

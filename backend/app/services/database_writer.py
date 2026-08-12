@@ -1,18 +1,42 @@
-from app.db.supabase import supabase
+from uuid import uuid4
+
+from app.database import supabase
+from app.services.save_to_db import insert
+
+
+def get_value(data, *keys):
+    if not isinstance(data, dict):
+        return None
+
+    for key in keys:
+        value = data.get(key)
+        if value not in [None, "", [], {}]:
+            return value
+
+    return None
 
 
 def write_database(data: dict):
-    """
-    Save normalized insurance data into all tables.
-    Fully deduplicated - safe to re-upload same PDF.
-    """
-
-    # ==========================
-    # COMPANY (dedup by company_name)
-    # ==========================
 
     company = data.get("company", {})
-    company_name = company.get("name")
+    policy = data.get("policy", {})
+    claims = data.get("claims", {})
+    network = data.get("network", {})
+
+    # ----------------------------
+    # COMPANY
+    # ----------------------------
+
+    company_name = (
+        get_value(
+            company,
+            "name",
+            "company_name",
+            "insuranceCompany",
+            "companyName",
+        )
+        or "Unknown Company"
+    )
 
     existing_company = (
         supabase.table("companies")
@@ -23,169 +47,131 @@ def write_database(data: dict):
 
     if existing_company.data:
         company_id = existing_company.data[0]["company_id"]
+        print(f"✅ Company already exists: {company_name}")
     else:
-        company_result = (
-            supabase.table("companies")
-            .insert({
+        company_id = str(uuid4())
+
+        insert(
+            "companies",
+            {
+                "company_id": company_id,
                 "company_name": company_name,
-                "irdai_license_number": company.get("IRDAIRegNo"),
-                "registration_number": company.get("CIN"),
-                "company_address": company.get("registeredOffice")
-            })
-            .execute()
+                "registration_number": get_value(
+                    company,
+                    "CIN",
+                    "registrationNumber",
+                ),
+                "irdai_license_number": get_value(
+                    company,
+                    "IRDAIRegNo",
+                    "irdaiNumber",
+                ),
+                "company_address": get_value(
+                    company,
+                    "registeredOffice",
+                    "address",
+                ),
+            },
         )
-        company_id = company_result.data[0]["company_id"]
 
-    # ==========================
-    # POLICY (dedup by policy_code / UIN)
-    # ==========================
+        print(f"✅ New company inserted: {company_name}")
 
-    policy = data.get("policy", {})
-    policy_code = policy.get("UIN")
+    # ----------------------------
+    # POLICY
+    # ----------------------------
+
+    policy_name = (
+        get_value(
+            policy,
+            "productName",
+            "policyName",
+            "name",
+        )
+        or "Unknown Policy"
+    )
 
     existing_policy = (
         supabase.table("policies")
         .select("policy_id")
-        .eq("policy_code", policy_code)
+        .eq("company_id", company_id)
+        .eq("policy_name", policy_name)
         .execute()
     )
 
     if existing_policy.data:
-        policy_id = existing_policy.data[0]["policy_id"]
-    else:
-        policy_result = (
-            supabase.table("policies")
-            .insert({
-                "company_id": company_id,
-                "policy_name": policy.get("productName"),
-                "policy_code": policy_code,
-                "policy_type": policy.get("policyType"),
-                "individual_or_family": policy.get("sumInsuredBasis")
-            })
-            .execute()
-        )
-        policy_id = policy_result.data[0]["policy_id"]
+        print("✅ Policy already exists.")
+        return
 
-    # ==========================
-    # COVERAGES (dedup by policy_id + coverage_name)
-    # ==========================
+    policy_id = str(uuid4())
 
-    coverages = policy.get("policyCoverage", [])
-
-    for coverage in coverages:
-        existing = (
-            supabase.table("coverages")
-            .select("coverage_id")
-            .eq("policy_id", policy_id)
-            .eq("coverage_name", coverage)
-            .execute()
-        )
-
-        if not existing.data:
-            (
-                supabase.table("coverages")
-                .insert({
-                    "policy_id": policy_id,
-                    "coverage_name": coverage
-                })
-                .execute()
-            )
-
-    # ==========================
-    # WAITING PERIOD (dedup by policy_id)
-    # ==========================
-
-    waiting = policy.get("waitingPeriod")
-
-    if waiting:
-        existing = (
-            supabase.table("waiting_periods")
-            .select("*")
-            .eq("policy_id", policy_id)
-            .execute()
-        )
-
-        if not existing.data:
-            (
-                supabase.table("waiting_periods")
-                .insert({
-                    "policy_id": policy_id,
-                    "condition": waiting
-                })
-                .execute()
-            )
-
-    # ==========================
-    # EXCLUSIONS (dedup by policy_id)
-    # ==========================
-
-    exclusion = policy.get("exclusions")
-
-    if exclusion:
-        existing = (
-            supabase.table("exclusions")
-            .select("*")
-            .eq("policy_id", policy_id)
-            .execute()
-        )
-
-        if not existing.data:
-            (
-                supabase.table("exclusions")
-                .insert({
-                    "policy_id": policy_id,
-                    "exclusion_description": exclusion
-                })
-                .execute()
-            )
-
-    # ==========================
-    # CLAIMS (dedup by policy_id)
-    # ==========================
-
-    claims = data.get("claims", {})
-
-    existing = (
-        supabase.table("claims")
-        .select("*")
-        .eq("policy_id", policy_id)
-        .execute()
+    insert(
+        "policies",
+        {
+            "policy_id": policy_id,
+            "company_id": company_id,
+            "policy_name": policy_name,
+            "policy_code": get_value(policy, "UIN", "policyCode"),
+            "policy_type": get_value(policy, "policyType"),
+            "individual_or_family": get_value(
+                policy,
+                "sumInsuredBasis",
+            ),
+        },
     )
 
-    if not existing.data:
-        (
-            supabase.table("claims")
-            .insert({
+    # ----------------------------
+    # COVERAGES
+    # ----------------------------
+
+    coverages = get_value(policy, "policyCoverage") or []
+
+    if isinstance(coverages, list):
+        for coverage in coverages:
+            insert(
+                "coverages",
+                {
+                    "coverage_id": str(uuid4()),
+                    "policy_id": policy_id,
+                    "coverage_name": str(coverage),
+                },
+            )
+
+    # ----------------------------
+    # CLAIMS
+    # ----------------------------
+
+    if claims:
+        insert(
+            "claims",
+            {
+                "claim_id": str(uuid4()),
                 "policy_id": policy_id,
-                "cashless_claim_process": claims.get("cashlessService"),
-                "reimbursement_claim_process": claims.get("reimbursementProcess"),
-                "claim_settlement_information": claims.get("turnAroundTime"),
-                "claim_source": claims.get("claimForm")
-            })
-            .execute()
+                "cashless_claim_process": get_value(
+                    claims,
+                    "cashlessService",
+                ),
+                "reimbursement_claim_process": get_value(
+                    claims,
+                    "reimbursementProcess",
+                ),
+            },
         )
 
-    # ==========================
-    # HOSPITAL NETWORK (dedup by policy_id)
-    # ==========================
+    # ----------------------------
+    # NETWORK
+    # ----------------------------
 
-    network = data.get("network", {})
-
-    existing = (
-        supabase.table("hospital_network")
-        .select("*")
-        .eq("policy_id", policy_id)
-        .execute()
-    )
-
-    if not existing.data:
-        (
-            supabase.table("hospital_network")
-            .insert({
+    if network:
+        insert(
+            "hospital_network",
+            {
+                "network_id": str(uuid4()),
                 "policy_id": policy_id,
-                "network_source": network.get("details")
-            })
-            .execute()
+                "network_source": get_value(
+                    network,
+                    "details",
+                ),
+            },
         )
 
-    print("✅ Data saved successfully.")
+    print("✅ Database write completed.")

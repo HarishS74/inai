@@ -1,17 +1,24 @@
 from fastapi import APIRouter
-from app.services.pdf_reader import read_pdf
-from app.services.groq_service import analyze
+from pydantic import BaseModel
 
-router = APIRouter(prefix="/ai", tags=["AI"])
+from app.services.groq_service import analyze_chunk
+
+router = APIRouter(
+    prefix="/ai",
+    tags=["AI"]
+)
 
 
-@router.get("/pdf")
-def analyze_pdf():
+class AIRequest(BaseModel):
+    text: str
 
-    text = read_pdf("app/uploads/sample.pdf")
 
-    result = analyze(text)
+@router.post("/")
+async def analyze_document(request: AIRequest):
+
+    result = analyze_chunk(request.text)
 
     return {
+        "status": "success",
         "result": result
     }
